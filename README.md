@@ -1,17 +1,17 @@
 # Spatial Transcriptomics Prediction from H&E Images
 
-ระบบทำนายการแสดงออกของยีนในเชิงพื้นที่จากภาพ H&E โดยใช้ Deep Learning 🧬
+ระบบทำนายการแสดงออกของยีนในเชิงพื้นที่จากภาพ H&E โดยใช้ Deep Learning
 
 Spatial gene expression prediction from H&E histology images using Deep Learning, trained with Xenium data.
 
 ## Features / คุณสมบัติ
 
-- 🖼️ **H&E Image Input** - Upload standard histology images
-- 🧬 **Gene Expression Prediction** - Predict 50+ genes simultaneously  
-- 🗺️ **Spatial Mapping** - Visualize expression across tissue
-- 📊 **Interactive Plots** - Explore results with Plotly
-- 🌐 **Bilingual Interface** - Thai/English web UI
-- 💾 **Export Results** - Download predictions as CSV
+- **H&E Image Input** - Upload standard histology images
+- **Gene Expression Prediction** - Predict 50+ genes simultaneously  
+- **Spatial Mapping** - Visualize expression across tissue
+- **Interactive Plots** - Explore results with Plotly
+- **Bilingual Interface** - Thai/English web UI
+- **Export Results** - Download predictions as CSV
 
 ## Quick Start / เริ่มต้นใช้งาน
 
