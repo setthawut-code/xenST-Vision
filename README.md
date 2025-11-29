@@ -180,7 +180,7 @@ If you use this code, please cite:
 ```bibtex
 @software{spatial_transcriptomics_prediction,
   title={Spatial Transcriptomics Prediction from H\&E Images},
-  author={Your Name},
+  author={Setthawut Intarapradit},
   year={2025}
 }
 ```
