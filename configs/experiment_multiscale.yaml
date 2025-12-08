@@ -1,0 +1,27 @@
+
+model:
+  backbone_name: "swin_base_patch4_window7_224"
+  pretrained: true
+  out_dim: 768
+  use_gnn: false
+
+train:
+  batch_size: 32
+  lr: 1e-4
+  epochs: 50
+  pretrain_epochs: 10
+  seed: 42
+
+data:
+  tile_size: 224
+  multiscale: [224, 512]
+  stain_normalize: true
+  scale_method: "standard"
+  train_ratio: 0.8
+  val_ratio: 0.1
+  test_ratio: 0.1
+  augmentation: true
+  rotation_range: 15
+  flip_horizontal: true
+  flip_vertical: true
+  color_jitter: 0.1

@@ -6,12 +6,14 @@ Spatial gene expression prediction from H&E histology images using Deep Learning
 
 ## Features / คุณสมบัติ
 
-- **H&E Image Input** - Upload standard histology images
-- **Gene Expression Prediction** - Predict 50+ genes simultaneously  
-- **Spatial Mapping** - Visualize expression across tissue
-- **Interactive Plots** - Explore results with Plotly
-- **Bilingual Interface** - Thai/English web UI
-- **Export Results** - Download predictions as CSV
+- 🖼️ **H&E Image Input** - Upload standard histology images
+- � **Multi-Scale Transformer** - Swin/ViT encoder for capturing details at multiple resolutions (Wave A)
+- 🕸️ **Spatial Graph Modeling** - Optional GNN integration for spatial context (Wave A)
+- �🧬 **Gene Expression Prediction** - Predict 50+ genes simultaneously  
+- 🗺️ **Spatial Mapping** - Visualize expression across tissue
+- 📊 **Interactive Plots** - Explore results with Plotly
+- 🌐 **Bilingual Interface** - Thai/English web UI
+- 💾 **Export Results** - Download predictions as CSV
 
 ## Quick Start / เริ่มต้นใช้งาน
 
@@ -28,19 +30,23 @@ pip install -r requirements.txt
 
 ### Training / การเทรนโมเดล
 
+**Legacy (ResNet50):**
 ```bash
-# 1. Prepare Xenium data
-# Download from: https://www.10xgenomics.com/datasets
-# Place in data/ directory
-
-# 2. Preprocess data
-python src/prepare_data.py --xenium-dir data/xenium_output --output data/processed
-
-# 3. Train model
 python src/train.py --config config/config.yaml
+```
 
-# Monitor training
-tensorboard --logdir logs/
+**Wave A (Multi-Scale + GNN):**
+```bash
+python src/train.py --config configs/experiment_multiscale.yaml
+```
+
+**Verification / ตรวจสอบความถูกต้อง:**
+
+Run the mini-benchmark to check model instantiation and metrics:
+```bash
+python3 verify_wave_a.py
+# or
+jupyter notebook notebooks/mini_benchmark.ipynb
 ```
 
 ### Web Interface / เว็บอินเตอร์เฟซ
@@ -67,11 +73,16 @@ python src/inference.py \
 
 ## Model Architecture / สถาปัตยกรรมโมเดล
 
-**Baseline Model:**
+**Wave A Model:**
+- **Backbone**: Multi-Scale Swin Transformer (via `timm`) or ViT
+- **Context**: Optional Spatial GNN (Graph Neural Network)
+- **Input**: Multi-scale H&E patches (e.g., 224x224, 512x512)
+- **Output**: Gene expression vector (variable genes) + Tissue classification
+- **Loss**: Regression Loss (MSE) + Classification Loss
+
+**Baseline Model (Legacy):**
 - **Encoder**: ResNet50 (pretrained on ImageNet)
 - **Decoder**: 3-layer MLP regression head
-- **Input**: 224×224 RGB H&E patches
-- **Output**: Gene expression vector (50 genes)
 - **Loss**: Mean Squared Error (MSE)
 
 **Performance:**

@@ -305,4 +305,47 @@ def create_data_splits(
     
     print(f"Data splits: Train={len(train_idx)}, Val={len(val_idx)}, Test={len(test_idx)}")
     
-    return train_dataset, val_dataset, test_dataset
+    def create_graph_dataset(self, config: Dict) -> 'list[torch_geometric.data.Data]':
+        """
+        Create Graph Dataset for Spatial GNN
+        Returns list of PyG Data objects (one per ROI or batch of single items not recommended for large graphs)
+        For this simplified version: we assume one large graph or per-tile graphs.
+        Let's implement a 'per-sample' graph builder if you have multiple WSIs.
+        
+        Realistically for Xenium: We have spots. We can build a graph over all spots.
+        """
+        # Placeholder for full graph implementation
+        # This usually requires re-loading all spots and building a massive graph or tiling graphs
+        pass
+
+# Add standalone functions for graph and stain norm
+
+def stain_normalization(image: np.ndarray, target_img: np.ndarray = None) -> np.ndarray:
+    """
+    Macenko Stain Normalization (Simplified)
+    For production use, consider using 'torchstain' or 'histomicstk'.
+    This is a placeholder to remind the user to integrate a robust normalizer.
+    """
+    # implementation omitted for brevity, returning original image
+    # Todo: Integrate real Macenko normalization
+    return image
+
+def build_spot_graph(spot_xy: np.ndarray, k: int = 6):
+    """
+    Build kNN graph from spot coordinates.
+    Returns edge_index [2, E]
+    """
+    from sklearn.neighbors import NearestNeighbors
+    nbrs = NearestNeighbors(n_neighbors=k+1, algorithm='auto').fit(spot_xy)
+    distances, indices = nbrs.kneighbors(spot_xy)
+    
+    src = []
+    dst = []
+    for i, neighbors in enumerate(indices):
+        for n in neighbors[1:]: # skip self
+             src.append(i)
+             dst.append(n)
+             
+    edge_index = np.array([src, dst], dtype=np.long)
+    return torch.tensor(edge_index, dtype=torch.long)
+
