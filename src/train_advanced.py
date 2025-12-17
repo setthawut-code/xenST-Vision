@@ -15,10 +15,12 @@ from pathlib import Path
 import numpy as np
 from tqdm import tqdm
 
-from model import SpatialTranscriptomicsPredictor, create_model
+# from model import SpatialTranscriptomicsPredictor, create_model
 from advanced_model import AdvancedSpatialPredictor, create_advanced_model, count_parameters
 from losses import get_loss_function, compute_per_gene_metrics
 from utils import load_config, setup_directories
+from dataset import XeniumDataset
+from torch.utils.data import random_split
 
 
 class AverageMeter:
@@ -63,8 +65,7 @@ class AdvancedTrainer:
             self.optimizer,
             mode='min',
             factor=0.5,
-            patience=config['training'].get('lr_patience', 10),
-            verbose=True
+            patience=config['training'].get('lr_patience', 10)
         )
         
         # Loss function
@@ -80,7 +81,7 @@ class AdvancedTrainer:
         self.max_grad_norm = config['training'].get('max_grad_norm', 1.0)
         
         # Tensorboard
-        log_dir = Path(config['paths']['log_dir']) / config['training'].get('experiment_name', 'advanced_model')
+        log_dir = Path(config['paths']['logs_dir']) / config['training'].get('experiment_name', 'advanced_model')
         self.writer = SummaryWriter(str(log_dir))
         
         # Checkpointing
@@ -113,7 +114,26 @@ class AdvancedTrainer:
             
             # Forward pass with mixed precision
             if self.use_amp:
-                with torch.cuda.amp.autocast():
+                # Use standard torch.amp.autocast for PyTorch 2.0+ support on cuda/cpu/mps
+                device_type = 'cuda' if self.device == 'cuda' else 'cpu'
+                if self.device == 'mps':
+                     # MPS autocast support might be limited or require 'cpu' fallback in some versions
+                     # But let's try 'cpu' if 'mps' fails or just disable if mixed precision is tricky
+                     device_type = 'cpu' # Safer fallback for stability, or 'mps' if supported in this torch version
+                
+                # Actually, torch.amp.autocast('mps') is supported in nightly/recent builds.
+                # If user wants MPS, let's try it, but standard might be CPU for safety if warning persists.
+                # Given user context, let's use 'cpu' for autocast context if not cuda, to avoid the specific "cuda not available" warning.
+                # Or better: check device.
+                
+                dtype = torch.float16 if self.device == 'cuda' else torch.bfloat16
+                # MPS often prefers bfloat16 or float16 depending on arch.
+                
+                # Simplified fix:
+                device_type = self.device if self.device in ['cuda', 'cpu'] else 'cpu' 
+                # Note: MPS autocast is 'mps' in newer versions, but 'cpu' is safe fallback for logic
+                
+                with torch.amp.autocast(device_type=device_type):
                     if self.loss_type in ['negative_binomial', 'hybrid']:
                         mu, theta = self.model(images)
                         loss = self.criterion(mu, theta, targets)
@@ -194,7 +214,20 @@ class AdvancedTrainer:
         
         return metrics
     
-    def save_checkpoint(self, metrics: dict, is_best: bool = False, is_latest: bool = True):
+    def load_checkpoint(self, checkpoint_path: str):
+        """Load model checkpoint"""
+        print(f"Loading checkpoint from {checkpoint_path}...")
+        checkpoint = torch.load(checkpoint_path, map_location=self.device)
+        self.model.load_state_dict(checkpoint['model_state_dict'])
+        self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+        self.current_epoch = checkpoint['epoch']
+        self.best_val_pearson = checkpoint.get('metrics', {}).get('pearson_median', -float('inf'))
+        self.best_val_loss = checkpoint.get('metrics', {}).get('loss', float('inf'))
+        print(f"✓ Resumed from epoch {self.current_epoch} (Best Pearson: {self.best_val_pearson:.4f})")
+        return self.current_epoch
+
+    def save_checkpoint(self, metrics: dict, is_best: bool = False, is_latest: bool = True, filename: str = None):
         """Save model checkpoint"""
         checkpoint = {
             'epoch': self.current_epoch,
@@ -206,6 +239,12 @@ class AdvancedTrainer:
             'gene_names': self.gene_names
         }
         
+        if filename:
+            path = self.checkpoint_dir / filename
+            torch.save(checkpoint, path)
+            print(f"✓ Saved checkpoint: {filename}")
+            return
+
         if is_latest:
             path = self.checkpoint_dir / 'latest_model.pth'
             torch.save(checkpoint, path)
@@ -215,7 +254,7 @@ class AdvancedTrainer:
             torch.save(checkpoint, path)
             print(f"✓ Saved best model (Pearson: {metrics['pearson_median']:.4f})")
     
-    def train(self, train_loader: DataLoader, val_loader: DataLoader, gene_names: list = None):
+    def train(self, train_loader: DataLoader, val_loader: DataLoader, gene_names: list = None, start_epoch: int = 1):
         """Main training loop"""
         self.gene_names = gene_names
         num_epochs = self.config['training']['epochs']
@@ -228,56 +267,68 @@ class AdvancedTrainer:
         print(f"Loss: {self.loss_type}")
         print(f"Device: {self.device}")
         print(f"Epochs: {num_epochs}")
+        if start_epoch > 1:
+            print(f"Resuming from epoch {start_epoch}")
         print(f"{'='*60}\n")
         
-        for epoch in range(1, num_epochs + 1):
-            self.current_epoch = epoch
-            
-            # Train
-            train_metrics = self.train_epoch(train_loader)
-            
-            # Validate
-            val_metrics = self.validate(val_loader)
-            
-            # Learning rate scheduling
-            self.scheduler.step(val_metrics['loss'])
-            
-            # Logging
-            self.writer.add_scalar('Loss/train', train_metrics['loss'], epoch)
-            self.writer.add_scalar('Loss/val', val_metrics['loss'], epoch)
-            self.writer.add_scalar('Metrics/pearson_median', val_metrics['pearson_median'], epoch)
-            self.writer.add_scalar('Metrics/pearson_mean', val_metrics['pearson_mean'], epoch)
-            self.writer.add_scalar('Metrics/spearman_median', val_metrics['spearman_median'], epoch)
-            self.writer.add_scalar('Metrics/rmse_mean', val_metrics['rmse_mean'], epoch)
-            self.writer.add_scalar('LR', self.optimizer.param_groups[0]['lr'], epoch)
-            
-            # Print progress
-            print(f"\nEpoch {epoch}/{num_epochs}")
-            print(f"  Train Loss: {train_metrics['loss']:.4f}")
-            print(f"  Val Loss: {val_metrics['loss']:.4f}")
-            print(f"  Pearson (median): {val_metrics['pearson_median']:.4f}")
-            print(f"  Pearson (mean): {val_metrics['pearson_mean']:.4f}")
-            print(f"  Spearman (median): {val_metrics['spearman_median']:.4f}")
-            print(f"  RMSE (mean): {val_metrics['rmse_mean']:.4f}")
-            print(f"  LR: {self.optimizer.param_groups[0]['lr']:.2e}")
-            
-            # Save checkpoints
-            is_best = val_metrics['pearson_median'] > self.best_val_pearson
-            self.save_checkpoint(val_metrics, is_best=is_best, is_latest=True)
-            
-            # Early stopping
-            if val_metrics['loss'] < self.best_val_loss:
-                self.best_val_loss = val_metrics['loss']
-                self.patience_counter = 0
-            else:
-                self.patience_counter += 1
-            
-            if val_metrics['pearson_median'] > self.best_val_pearson:
-                self.best_val_pearson = val_metrics['pearson_median']
-            
-            if self.patience_counter >= self.patience:
-                print(f"\nEarly stopping triggered (patience={self.patience})")
-                break
+        try:
+            for epoch in range(start_epoch, num_epochs + 1):
+                self.current_epoch = epoch
+                
+                # Train
+                train_metrics = self.train_epoch(train_loader)
+                
+                # Validate
+                val_metrics = self.validate(val_loader)
+                
+                # Learning rate scheduling
+                self.scheduler.step(val_metrics['loss'])
+                
+                # Logging
+                self.writer.add_scalar('Loss/train', train_metrics['loss'], epoch)
+                self.writer.add_scalar('Loss/val', val_metrics['loss'], epoch)
+                self.writer.add_scalar('Metrics/pearson_median', val_metrics['pearson_median'], epoch)
+                self.writer.add_scalar('Metrics/pearson_mean', val_metrics['pearson_mean'], epoch)
+                self.writer.add_scalar('Metrics/spearman_median', val_metrics['spearman_median'], epoch)
+                self.writer.add_scalar('Metrics/rmse_mean', val_metrics['rmse_mean'], epoch)
+                self.writer.add_scalar('LR', self.optimizer.param_groups[0]['lr'], epoch)
+                
+                # Print progress
+                print(f"\nEpoch {epoch}/{num_epochs}")
+                print(f"  Train Loss: {train_metrics['loss']:.4f}")
+                print(f"  Val Loss: {val_metrics['loss']:.4f}")
+                print(f"  Pearson (median): {val_metrics['pearson_median']:.4f}")
+                print(f"  Pearson (mean): {val_metrics['pearson_mean']:.4f}")
+                print(f"  Spearman (median): {val_metrics['spearman_median']:.4f}")
+                print(f"  RMSE (mean): {val_metrics['rmse_mean']:.4f}")
+                print(f"  LR: {self.optimizer.param_groups[0]['lr']:.2e}")
+                
+                # Save checkpoints
+                is_best = val_metrics['pearson_median'] > self.best_val_pearson
+                self.save_checkpoint(val_metrics, is_best=is_best, is_latest=True)
+                
+                # Early stopping
+                if val_metrics['loss'] < self.best_val_loss:
+                    self.best_val_loss = val_metrics['loss']
+                    self.patience_counter = 0
+                else:
+                    self.patience_counter += 1
+                
+                if val_metrics['pearson_median'] > self.best_val_pearson:
+                    self.best_val_pearson = val_metrics['pearson_median']
+                
+                if self.patience_counter >= self.patience:
+                    print(f"\nEarly stopping triggered (patience={self.patience})")
+                    break
+                    
+        except KeyboardInterrupt:
+            print("\n\nTraining interrupted by user!")
+            print("Saving partial checkpoint to interrupted_model.pth...")
+            # We assume train_metrics exists if at least one epoch finished, or try to use last known
+            # But safer to just save current state
+            dummy_metrics = {'loss': float('inf'), 'pearson_median': 0.0}
+            self.save_checkpoint(dummy_metrics, is_best=False, is_latest=False, filename='interrupted_model.pth')
+            print("Done. You can resume later.")
         
         self.writer.close()
         print(f"\n{'='*60}")
@@ -286,10 +337,21 @@ class AdvancedTrainer:
         print(f"{'='*60}\n")
 
 
+class WorkerInit:
+    """Callable for worker initialization visibility"""
+    def __init__(self, total_workers):
+        self.total_workers = total_workers
+        
+    def __call__(self, worker_id):
+        count = worker_id + 1
+        percent = (count / self.total_workers) * 100
+        print(f"[{os.getpid()}] Worker {count}/{self.total_workers} initialized ({percent:.1f}%)")
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', type=str, default='config/config.yaml')
     parser.add_argument('--model-type', type=str, choices=['baseline', 'advanced'], default=None)
+    parser.add_argument('--resume', type=str, default=None, help='Path to checkpoint to resume from (or "latest" or "interrupted")')
     args = parser.parse_args()
     
     # Load configuration
@@ -324,18 +386,109 @@ def main():
     
     print(f"✓ Model parameters: {count_parameters(model):,}")
     
-    # TODO: Load actual data
-    # This requires Xenium dataset to be available
-    print("\n⚠️  Data loading not implemented yet - requires Xenium dataset")
-    print("Please prepare your dataset first:")
-    print("  1. Download Xenium data from 10x Genomics")
-    print("  2. Implement data preparation script")
-    print("  3. Create DataLoaders")
+    # Create dataset
+    print("\nInitializing dataset...")
+    xenium_data_path = Path(config['data']['xenium_data_path'])
+    if not xenium_data_path.exists():
+        # Fallback to hardcoded path if config path is empty or invalid
+        xenium_data_path = Path("Xenium dataset file")
     
-    # Example of how to use the trainer (when data is ready):
-    # trainer = AdvancedTrainer(config, model, device)
-    # trainer.train(train_loader, val_loader, gene_names)
+    dataset = XeniumDataset(
+        image_path=xenium_data_path / "morphology_mip.ome.tif",
+        transcripts_path=xenium_data_path / "transcripts_full.csv",
+        metadata_path=xenium_data_path / "metadata.json",
+        patch_size=config['data']['patch_size'],
+        # Use simple stride for now, or add to config
+        stride=config['data'].get('stride', config['data']['patch_size']),
+        preload_image=False
+    )
+    
+    # Update config with actual number of genes
+    config['model']['num_genes'] = dataset.num_genes
+    gene_names = dataset.gene_names
+    print(f"✓ Dataset loaded: {len(dataset)} patches, {dataset.num_genes} genes")
+    
+    # Split data
+    train_ratio = config['data']['train_ratio']
+    val_ratio = config['data']['val_ratio']
+    test_ratio = config['data']['test_ratio']
+    
+    total_size = len(dataset)
+    train_size = int(total_size * train_ratio)
+    val_size = int(total_size * val_ratio)
+    test_size = total_size - train_size - val_size
+    
+    train_dataset, val_dataset, test_dataset = random_split(
+        dataset, [train_size, val_size, test_size],
+        generator=torch.Generator().manual_seed(42)
+    )
+    
+    print(f"✓ Splits: Train={len(train_dataset)}, Val={len(val_dataset)}, Test={len(test_dataset)}")
+    
+    # Create DataLoaders
+    use_pin_memory = (device != 'mps')
+    if device == 'mps':
+        print("ℹ️  Disabling pin_memory for MPS device")
+
+    # Define worker init function for visibility
+    total_workers = config['training']['num_workers']
+    worker_init = WorkerInit(total_workers)
+
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=config['training']['batch_size'],
+        shuffle=True,
+        num_workers=total_workers,
+        pin_memory=use_pin_memory,
+        worker_init_fn=worker_init
+    )
+    
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=config['training']['batch_size'],
+        shuffle=False,
+        num_workers=total_workers,
+        pin_memory=use_pin_memory,
+        worker_init_fn=worker_init
+    )
+
+    # Create model (re-create with correct num_genes)
+    if model_type == 'advanced':
+        model = create_advanced_model(config)
+    else:
+        model = create_model(config)
+    model = model.to(device)
+    print(f"✓ Re-created model with {dataset.num_genes} output genes")
+
+    # Train
+    trainer = AdvancedTrainer(config, model, device)
+    
+    # Handle Resume
+    start_epoch = 1
+    if args.resume:
+        checkpoint_dir = Path(config['paths']['checkpoints_dir'])
+        if args.resume == 'latest':
+            resume_path = checkpoint_dir / 'latest_model.pth'
+        elif args.resume == 'interrupted':
+             resume_path = checkpoint_dir / 'interrupted_model.pth'
+        else:
+            resume_path = Path(args.resume)
+            
+        if resume_path.exists():
+            last_epoch = trainer.load_checkpoint(resume_path)
+            start_epoch = last_epoch + 1
+        else:
+            print(f"⚠️ Checkpoint not found at {resume_path}, starting from scratch.")
+            
+    trainer.train(train_loader, val_loader, gene_names, start_epoch=start_epoch)
 
 
 if __name__ == "__main__":
+    try:
+        # MacOS requires 'spawn' start method
+        import multiprocessing
+        multiprocessing.set_start_method('spawn', force=True)
+    except RuntimeError:
+        pass
+        
     main()

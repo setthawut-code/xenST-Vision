@@ -1,0 +1,40 @@
+
+model:
+  backbone_name: "resnet18"  # Lightweight backbone
+  pretrained: true
+  out_dim: 512              # ResNet18 output dim
+  use_gnn: false            # Disable GNN to save memory if needed, or keep false as per default
+
+training:
+  batch_size: 128           # Increased for FULL GPU saturation
+  num_workers: 4            # Enable parallel data loading
+  learning_rate: 0.0001
+  weight_decay: 0.0001
+  epochs: 50
+  pretrain_epochs: 10
+  seed: 42
+  mixed_precision: true
+  grad_clip: 1.0
+  early_stopping_patience: 10
+
+data:
+  tile_size: 224
+  multiscale: [224]         # Single scale to save memory
+  stain_normalize: true
+  scale_method: "standard"
+  train_ratio: 0.8
+  val_ratio: 0.1
+  test_ratio: 0.1
+  augmentation: true
+  rotation_range: 15
+  flip_horizontal: true
+  flip_vertical: true
+  color_jitter: 0.1
+
+paths:
+  data_dir: "Xenium dataset file"
+  image_path: "Xenium dataset file/morphology_mip.ome.tif"
+  transcripts_path: "Xenium dataset file/transcripts_full.csv"
+  output_dir: "output"
+  logs_dir: "logs"
+  checkpoints_dir: "checkpoints"

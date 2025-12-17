@@ -19,6 +19,8 @@ sys.path.append(str(Path(__file__).parent))
 
 from model import create_model, count_parameters
 from data_preprocessing import get_transforms
+from dataset import XeniumDataset
+from torch.utils.data import random_split
 from utils import (
     load_config,
     setup_directories,
@@ -86,6 +88,8 @@ class Trainer:
             if self.use_amp:
                 with torch.cuda.amp.autocast():
                     outputs = self.model(images)
+                    if isinstance(outputs, tuple):
+                        outputs = outputs[0]
                     loss = self.criterion(outputs, targets)
                 
                 # Backward pass
@@ -155,6 +159,8 @@ class Trainer:
                 targets = targets.to(self.device)
                 
                 outputs = self.model(images)
+                if isinstance(outputs, tuple):
+                    outputs = outputs[0]
                 loss = self.criterion(outputs, targets)
                 
                 losses.update(loss.item(), images.size(0))
@@ -266,25 +272,92 @@ def main():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
     
+
+    
+    # Load Config Paths
+    paths = config.get('paths', {})
+    image_path = paths.get('image_path')
+    transcripts_path = paths.get('transcripts_path')
+    
+    if not image_path or not os.path.exists(image_path):
+        print(f"\\nError: Image path not found: {image_path}")
+        return
+
+    print(f"\\nInitializing Dataset from: {image_path}")
+    
+    # Instantiate Dataset
+    full_dataset = XeniumDataset(
+        image_path=image_path,
+        transcripts_path=transcripts_path,
+        patch_size=config['data']['tile_size'],
+        stride=config['data']['tile_size'], # Non-overlapping for now
+        min_counts=10, 
+        preload_image=False
+    )
+    
+    print(f"Total patches: {len(full_dataset)}")
+    
+    # Update config with actual number of genes
+    config['model']['num_genes'] = full_dataset.num_genes
+    print(f"Dataset has {full_dataset.num_genes} genes. Updating model config.")
+    
     # Create model
     model = create_model(config)
     print(f"Model created with {count_parameters(model):,} parameters")
     
-    # TODO: Load data
-    # This requires actual Xenium data - will be implemented when data is available
-    print("\\n⚠️  Data loading not implemented yet - requires Xenium dataset")
-    print("Please run data preprocessing first to prepare your dataset")
+    # Split Data
+    train_size = int(config['data']['train_ratio'] * len(full_dataset))
+    val_size = len(full_dataset) - train_size
+    train_dataset, val_dataset = random_split(full_dataset, [train_size, val_size], generator=torch.Generator().manual_seed(config['training']['seed']))
     
-    # Example usage (commented out until data is ready):
-    # from data_preprocessing import create_data_splits, get_transforms
-    # train_dataset, val_dataset, test_dataset = load_your_data()
-    # train_loader = DataLoader(train_dataset, batch_size=config['training']['batch_size'], 
-    #                           shuffle=True, num_workers=config['training']['num_workers'])
-    # val_loader = DataLoader(val_dataset, batch_size=config['training']['batch_size'],
-    #                         shuffle=False, num_workers=config['training']['num_workers'])
-    # 
-    # trainer = Trainer(config, model, device)
-    # trainer.train(train_loader, val_loader)
+    print(f"Train size: {len(train_dataset)}, Val size: {len(val_dataset)}")
+    
+    # Create DataLoaders
+    # Note: XeniumDataset returns raw numpy/PIL, so we need transforms here? 
+    # Actually XeniumDataset __getitem__ applies self.transform if provided.
+    # But we initialized it without transform. Let's fix that wrapper or apply transform via Collate or just wrap it?
+    # Simpler: We can inject transforms into the subset if we hack it, OR (better) pass transform to XeniumDataset and let it handle IT.
+    # But XeniumDataset takes one transform. We usually want different transforms for train/val.
+    # Standard pattern: Create two dataset instances or use a wrapper. 
+    # For now, let's keep it simple: No transforms (DL will receive tensors if dataset does basic conversion).
+    # Checking dataset.py: __getitem__ returns (image, expression). 
+    # Image is converted to Tensor if transform is None? - CHECK CODE. 
+    # dataset.py line 208: if self.transform: image = self.transform(image). 
+    # If not transform, it returns PIL? No line 206 converts to PIL. 
+    # If no transform, it might fail to convert to tensor if not handled.
+    # Let's check dataset.py again. 
+    
+    # To be safe and quick: Let's assume we want basic ToTensor at least.
+    # train.py imports get_transforms.
+    
+    # Let's re-instantiate or wrap. 
+    # Option: Modify dataset class to allow setter? No.
+    # Option: Custom Collate? 
+    # Option: Just use the same transform for both for now (basic normalization).
+    
+    common_transform = get_transforms(config, is_training=False) # Safe bet
+    full_dataset.transform = common_transform 
+
+    train_loader = DataLoader(
+        train_dataset, 
+        batch_size=config['training']['batch_size'], 
+        shuffle=True, 
+        num_workers=config['training'].get('num_workers', 0),
+        pin_memory=True,
+        persistent_workers=(config['training'].get('num_workers', 0) > 0)
+    )
+    
+    val_loader = DataLoader(
+        val_dataset, 
+        batch_size=config['training']['batch_size'],
+        shuffle=False, 
+        num_workers=config['training'].get('num_workers', 0),
+        pin_memory=True,
+        persistent_workers=(config['training'].get('num_workers', 0) > 0)
+    )
+    
+    trainer = Trainer(config, model, device)
+    trainer.train(train_loader, val_loader)
 
 
 if __name__ == "__main__":

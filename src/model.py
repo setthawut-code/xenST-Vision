@@ -6,7 +6,7 @@ Integrates Multi-Scale Transformer Encoder (timm) and optional Spatial GNN (PyG)
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from timm import create_model
+from timm import create_model as timm_create_model
 from einops import rearrange
 
 # Optional: simple GNN head using torch_geometric
@@ -26,7 +26,7 @@ class MultiScaleEncoder(nn.Module):
         # create_model with global_pool='token' or similar depending on model type; 
         # swin transformers usually output (B, H*W, C) or (B, C) with pool. 
         # Here we use num_classes=0 to get features.
-        self.backbone = create_model(backbone_name, pretrained=pretrained, num_classes=0, global_pool='')
+        self.backbone = timm_create_model(backbone_name, pretrained=pretrained, num_classes=0, global_pool='')
         self.out_dim = out_dim
         
         # We need to determine the feature dimension dynamically or default to 1024/768/etc
@@ -108,6 +108,31 @@ class XenSTModel(nn.Module):
         if return_feats:
             return preds, cls_logits, feats
         return preds, cls_logits
+
+def create_model(config):
+    """Factory function to create XenSTModel from config"""
+    model_cfg = config['model']
+    
+    # Handle config key differences
+    embed_dim = model_cfg.get('out_dim', model_cfg.get('embed_dim', 512))
+    
+    encoder_cfg = {
+        'backbone_name': model_cfg.get('backbone_name', 'resnet18'),
+        'pretrained': model_cfg.get('pretrained', True),
+        'out_dim': embed_dim
+    }
+    
+    model = XenSTModel(
+        encoder_cfg=encoder_cfg,
+        embed_dim=embed_dim,
+        num_genes=model_cfg.get('num_genes', 50),
+        use_gnn=model_cfg.get('use_gnn', False)
+    )
+    return model
+
+def count_parameters(model):
+    """Count trainable parameters"""
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
 if __name__ == "__main__":
     # Test model instantiation

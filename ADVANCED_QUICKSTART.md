@@ -22,11 +22,26 @@ pip install scipy
 python src/advanced_model.py
 ```
 
-## Train (when data is ready)
+## Train (Running)
+
+Make sure you are in the virtual environment:
+
+```bash
+source venv/bin/activate
+```
+
+Then run the training script:
 
 ```bash
 python src/train_advanced.py
 ```
+
+This will:
+1. Load `morphology_mip.ome.tif` and `transcripts_full.csv` from `Xenium dataset file/`.
+2. Generate image patches and gene expression targets.
+3. Train the `convnext_base` model to predict gene expression from histology.
+4. Save checkpoints to `checkpoints/`.
+
 
 ## Configuration
 

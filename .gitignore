@@ -31,6 +31,8 @@ data/
 *.tiff
 *.ome.tif
 *.csv.gz
+Xenium dataset file/
+Slide 001 raw/
 
 # Model checkpoints
 checkpoints/
@@ -66,3 +68,4 @@ Thumbs.db
 # Environment
 .env
 .venv
+venv_*/

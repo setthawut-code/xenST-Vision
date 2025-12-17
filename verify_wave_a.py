@@ -1,6 +1,7 @@
 
 import sys
 import os
+import argparse
 sys.path.append(os.path.abspath('src')) # adjust path to root/src
 
 import torch
@@ -9,10 +10,15 @@ from src.model import XenSTModel
 from src.eval import per_gene_metrics
 import numpy as np
 
+# Parse args
+parser = argparse.ArgumentParser()
+parser.add_argument('--config', type=str, default='configs/experiment_multiscale.yaml', help='Path to config file')
+args = parser.parse_args()
+
 # Load Config
-print("Loading config...")
+print(f"Loading config from {args.config}...")
 # Assuming running from project root
-with open('configs/experiment_multiscale.yaml', 'r') as f:
+with open(args.config, 'r') as f:
     config = yaml.safe_load(f)
 
 print("Config Loaded:", config['model'])
