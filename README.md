@@ -21,7 +21,7 @@ Spatial gene expression prediction from H&E histology images using Deep Learning
 
 ```bash
 # Clone repository
-git clone <your-repo-url>
+git clone https://github.com/setthawut-code/xenST-Vision.git
 cd ProjectXenium
 
 # Install dependencies
